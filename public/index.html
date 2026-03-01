@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sala Pro Audio V6 - Privacy UI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* ESTILOS DE ALTO CONTRASTE */
+        body { background-color: #000000; color: #ffffff; font-family: 'Segoe UI', monospace; }
+        .card { background-color: #1a1a1a; border: 1px solid #444; box-shadow: 0 0 15px rgba(255, 255, 255, 0.05); }
+        h3, h4, h5 { color: #ffffff; font-weight: bold; }
+        label { color: #dddddd; font-weight: 500; }
+        p { color: #cccccc; }
+        
+        /* Botones personalizados */
+        .btn-mic-on { background-color: #00ff00; color: #000; font-weight: bold; border: none; }
+        .btn-mic-off { background-color: #ff0000; color: #fff; font-weight: bold; border: none; }
+        
+        .btn-sys-on { background-color: #00ccff; color: #000; font-weight: bold; border: none; box-shadow: 0 0 10px #00ccff; }
+        .btn-sys-off { background-color: #333; color: #00ccff; font-weight: bold; border: 1px solid #00ccff; }
+
+        .btn-monitor-on { background-color: #ffff00; color: #000; font-weight: bold; border: none; }
+        .btn-monitor-off { background-color: #555; color: #ffff00; font-weight: bold; border: 1px solid #ffff00; }
+        
+        select.form-select { background-color: #333 !important; color: #fff !important; border: 1px solid #777 !important; }
+        .user-item { padding: 10px; border-bottom: 1px solid #444; display: flex; justify-content: space-between; align-items: center; background: #111; }
+        #vu-meter { border: 1px solid #555; background: #222; }
+        #remote-audios { display: none; } /* Ocultar visualmente los elementos de audio */
+    </style>
+</head>
+<body class="d-flex align-items-center justify-content-center" style="min-height: 100vh;">
+
+    <div id="login-panel" class="card p-4" style="width: 350px;">
+        <h3 class="text-center mb-3">Nombre de Usuario</h3>
+        <input type="text" id="username" class="form-control mb-3" placeholder="Nombre..." autocomplete="off" style="background: #333; color: white; border: 1px solid #555;">
+        <button class="btn btn-primary w-100 fw-bold" onclick="joinRoom()">ENTRAR</button>
+    </div>
+
+    <div id="room-panel" class="container d-none">
+        <div class="row justify-content-center"> <div id="main-col" class="col-md-7 mb-3">
+                <div class="card p-4 h-100">
+                    <h4 id="role-badge" class="badge bg-secondary mb-4 fs-5">Cargando rol...</h4>
+                    
+                    <div id="broadcaster-controls" class="d-none">
+                        <h5 class="text-info border-bottom pb-2">🎙 Fuente de Audio</h5>
+                        
+                        <label class="mt-2">Opción 1: Micrófono</label>
+                        <div class="input-group mb-2">
+                            <select id="audio-input" class="form-select"></select>
+                            <button id="mic-btn" class="btn btn-mic-off" style="width: 120px;" onclick="toggleMic()">OFF</button>
+                        </div>
+                        
+                        <div class="form-check form-switch mb-4">
+                            <input class="form-check-input" type="checkbox" id="music-mode">
+                            <label class="form-check-label text-secondary" style="font-size: 0.9em;" for="music-mode">Modo Música (Sin cancelación de eco)</label>
+                        </div>
+
+                        <label class="text-info">Opción 2: Audio Interno PC</label>
+                        <p class="small text-muted mb-1">Comparte audio de YouTube, Spotify o Sistema sin usar micro.</p>
+                        <button id="sys-audio-btn" class="btn btn-sys-off w-100 mb-4" onclick="toggleSystemAudio()">
+                            📺 TRANSMITIR AUDIO PC
+                        </button>
+                        
+                        <hr class="border-secondary">
+
+                        <label>Monitor de Salida (Ganancia)</label>
+                        <input type="range" class="form-range" min="0" max="3" step="0.1" value="1" oninput="setGain(this.value)">
+                        <canvas id="vu-canvas" width="400" height="20" class="w-100 rounded"></canvas>
+                        
+                        <div id="monitor-section" class="mt-4 p-3 border border-secondary rounded" style="background: #222;">
+                            <h5 class="text-warning">🎧 Retorno (Solo tú escuchas)</h5>
+                            <select id="audio-output" class="form-select mb-2" onchange="changeOutputDestination()"></select>
+                            <button id="monitor-btn" class="btn btn-monitor-off w-100" onclick="toggleMonitor()">MONITOR: APAGADO</button>
+                        </div>
+                    </div>
+
+                    <div id="listener-msg" class="d-none text-center py-5">
+                        <h3 class="text-success">🎧 Modo Oyente</h3>
+                        <p class="fs-5">Esperando transmisión...</p>
+                        <div class="spinner-grow text-success" role="status"></div>
+                        <p class="mt-3 text-muted small">Escuchando frecuencia maestra...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="user-col" class="col-md-5 mb-3">
+                <div class="card p-3 h-100">
+                    <h5 class="border-bottom pb-2">👥 Participantes</h5>
+                    <ul id="user-list" class="list-unstyled mt-3"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="remote-audios"></div>
+    <audio id="monitor-audio" autoplay></audio>
+
+<script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let myId, myRole;
+        let localStream = null;
+        let audioContext, analyser, microphone, gainNode;
+        
+        // Estados
+        let isMicOn = false;
+        let isSysAudioOn = false;
+        let isMonitorOn = false;
+        
+        let peerConnections = {};
+        const rtcConfig = { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] };
+
+        async function joinRoom() {
+            let name = document.getElementById('username').value;
+            if(!name) return;
+            
+            // [FIX] Sanitización básica para evitar inyección HTML/XSS
+            name = name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioContext.state === 'suspended') await audioContext.resume();
+            
+            socket.emit('join-room', name);
+            document.getElementById('login-panel').classList.add('d-none');
+            document.getElementById('room-panel').classList.remove('d-none');
+        }
+
+        async function getPermissionsAndDevices() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(t => t.stop()); 
+                await listDevices();
+            } catch(e) { console.error("Permiso denegado", e); }
+        }
+
+        async function listDevices() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const inputSelect = document.getElementById('audio-input');
+                const outputSelect = document.getElementById('audio-output');
+                inputSelect.innerHTML = '';
+                outputSelect.innerHTML = '';
+                devices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `${device.kind} Genérico`;
+                    if(device.kind === 'audioinput') inputSelect.appendChild(option);
+                    else if(device.kind === 'audiooutput') outputSelect.appendChild(option);
+                });
+                if(outputSelect.options.length === 0) outputSelect.add(new Option("Salida Default", "default"));
+            } catch (e) { console.warn("No se pudieron listar dispositivos", e); }
+        }
+
+        // --- AUDIO CORE ---
+        async function toggleMic() {
+            if (isSysAudioOn) await stopStream();
+            if (isMicOn) await stopStream(); else await startMicStream();
+            updateButtonsUI();
+        }
+
+        async function toggleSystemAudio() {
+            if (isMicOn) await stopStream();
+            if (isSysAudioOn) await stopStream(); else await startSystemStream();
+            updateButtonsUI();
+        }
+
+        async function stopStream() {
+            if (localStream) {
+                localStream.getTracks().forEach(t => t.stop());
+                localStream = null;
+            }
+            isMicOn = false; isSysAudioOn = false;
+            stopSendingTracks(); // Deja de enviar bits a la red
+            updateButtonsUI();
+        }
+
+        async function startMicStream() {
+            const deviceId = document.getElementById('audio-input').value;
+            const musicMode = document.getElementById('music-mode').checked;
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: !musicMode, noiseSuppression: !musicMode, autoGainControl: !musicMode }
+                });
+                isMicOn = true; processAudioStream(); addLocalTracksToPeers(); 
+            } catch(e) { 
+                alert("Error al acceder al micrófono. Verifica permisos."); 
+                console.error(e);
+            }
+        }
+
+        async function startSystemStream() {
+            try {
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                
+                // [FIX] Si el usuario comparte pantalla pero NO marca "compartir audio", stream.getAudioTracks() estará vacío
+                if (stream.getAudioTracks().length === 0) {
+                    alert("⚠️ No seleccionaste 'Compartir Audio' en la ventana emergente.");
+                    stream.getTracks().forEach(t => t.stop()); // Cerramos video si no hay audio
+                    return;
+                }
+
+                stream.getVideoTracks()[0].stop(); // Ahorrar ancho de banda
+                stream.getAudioTracks()[0].onended = () => stopStream(); // Si usuario cancela desde navegador
+                
+                localStream = stream; 
+                isSysAudioOn = true; 
+                processAudioStream(); 
+                addLocalTracksToPeers();
+            } catch(e) { 
+                console.log("Usuario canceló compartir pantalla o error:", e);
+                // No hacemos nada, simplemente no iniciamos
+            }
+        }
+
+        function updateButtonsUI() {
+            const micBtn = document.getElementById('mic-btn');
+            const sysBtn = document.getElementById('sys-audio-btn');
+            
+            // Reset clases
+            micBtn.className = isMicOn ? "btn btn-mic-on" : "btn btn-mic-off";
+            micBtn.innerText = isMicOn ? "ON" : "OFF";
+            
+            if (isSysAudioOn) {
+                sysBtn.className = "btn btn-sys-on w-100 mb-4";
+                sysBtn.innerText = "📺 TRANSMITIENDO PC...";
+            } else {
+                sysBtn.className = "btn btn-sys-off w-100 mb-4";
+                sysBtn.innerText = "📺 TRANSMITIR AUDIO PC";
+            }
+        }
+
+        function processAudioStream() {
+            if (audioContext.state === 'suspended') audioContext.resume();
+            
+            // [FIX] Evitar crear nodos infinitos si cambiamos rápido de fuente
+            if (microphone) microphone.disconnect();
+            if (gainNode) gainNode.disconnect();
+            
+            microphone = audioContext.createMediaStreamSource(localStream);
+            gainNode = audioContext.createGain();
+            analyser = audioContext.createAnalyser();
+            microphone.connect(gainNode); gainNode.connect(analyser);
+            drawVuMeter(); if(isMonitorOn) attachMonitor();
+        }
+        
+        function setGain(val) { if(gainNode) gainNode.gain.value = val; }
+
+        // --- WEBRTC ---
+        function initPeerConnection(targetId) {
+            const pc = new RTCPeerConnection(rtcConfig);
+            peerConnections[targetId] = pc;
+            
+            // Manejo de estado de conexión para debug
+            pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                    cleanupPeer(targetId);
+                }
+            };
+
+            if(localStream && (isMicOn || isSysAudioOn)) {
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            }
+            setupPeerEvents(pc, targetId);
+            createOffer(pc, targetId);
+        }
+
+        function cleanupPeer(targetId) {
+            // [FIX] Función de limpieza profunda
+            if (peerConnections[targetId]) {
+                peerConnections[targetId].close();
+                delete peerConnections[targetId];
+            }
+            const audioElem = document.getElementById(`audio-${targetId}`);
+            if (audioElem) audioElem.remove();
+        }
+
+        function setupPeerEvents(pc, targetId) {
+            pc.onicecandidate = e => { if(e.candidate) socket.emit('ice-candidate', { target: targetId, candidate: e.candidate }); };
+            pc.ontrack = e => {
+                let audioElem = document.getElementById(`audio-${targetId}`);
+                if (!audioElem) {
+                    audioElem = document.createElement('audio');
+                    audioElem.id = `audio-${targetId}`;
+                    audioElem.autoplay = true;
+                    // [FIX] Ocultar audios remotos para no ensuciar el DOM visualmente
+                    audioElem.style.display = 'none'; 
+                    document.getElementById('remote-audios').appendChild(audioElem);
+                }
+                audioElem.srcObject = e.streams[0];
+                audioElem.play().catch(err => console.log("Autoplay prevenido por navegador (esperando interacción)"));
+            };
+        }
+
+        async function createOffer(pc, targetId) {
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                socket.emit('offer', { target: targetId, sdp: pc.localDescription });
+            } catch(e) { console.error("Error creando oferta", e); }
+        }
+
+        function addLocalTracksToPeers() {
+            if(!localStream) return;
+            const audioTrack = localStream.getAudioTracks()[0];
+            Object.keys(peerConnections).forEach(async targetId => {
+                const pc = peerConnections[targetId];
+                const senders = pc.getSenders();
+                const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+                if (audioSender) {
+                    audioSender.replaceTrack(audioTrack);
+                } else { 
+                    pc.addTrack(audioTrack, localStream); 
+                    await createOffer(pc, targetId); 
+                }
+            });
+        }
+
+        function stopSendingTracks() {
+            Object.values(peerConnections).forEach(pc => { 
+                pc.getSenders().forEach(sender => { 
+                    if(sender.track) sender.track.stop(); 
+                }); 
+            });
+        }
+
+        // --- SOCKET SIGNALS ---
+        socket.on('offer', async d => {
+            let pc = peerConnections[d.caller];
+            if (!pc) { pc = new RTCPeerConnection(rtcConfig); peerConnections[d.caller] = pc; setupPeerEvents(pc, d.caller); }
+            await pc.setRemoteDescription(new RTCSessionDescription(d.sdp));
+            if(localStream && (isMicOn || isSysAudioOn)) {
+                const senders = pc.getSenders().map(s => s.track);
+                localStream.getTracks().forEach(track => { if(!senders.includes(track)) pc.addTrack(track, localStream); });
+            }
+            const answer = await pc.createAnswer(); await pc.setLocalDescription(answer); socket.emit('answer', { target: d.caller, sdp: answer });
+        });
+        socket.on('answer', async d => { if(peerConnections[d.caller]) await peerConnections[d.caller].setRemoteDescription(new RTCSessionDescription(d.sdp)); });
+        socket.on('ice-candidate', async d => { if(peerConnections[d.caller]) await peerConnections[d.caller].addIceCandidate(new RTCIceCandidate(d.candidate)); });
+
+        // --- UI & ROLES ---
+        socket.on('my-role', (user) => { myId = user.id; myRole = user.role; updateInterface(); if(myRole === 'host') getPermissionsAndDevices(); });
+        
+        socket.on('role-changed', (role) => {
+            myRole = role; 
+            updateInterface();
+            if(role === 'cohost') { 
+                alert("⭐ Ahora eres Co-Anfitrión."); 
+                getPermissionsAndDevices(); 
+            } else if (role === 'listener') { 
+                stopStream();
+            }
+        });
+        
+        socket.on('force-mute', () => { if(isMicOn || isSysAudioOn) stopStream(); document.getElementById('mic-btn').disabled = true; document.getElementById('sys-audio-btn').disabled = true; });
+        socket.on('force-unmute', () => { document.getElementById('mic-btn').disabled = false; document.getElementById('sys-audio-btn').disabled = false; });
+        
+        // [FIX] Recargar si el servidor se reinicia para evitar estados corruptos
+        socket.on('disconnect', () => { 
+            console.warn("Desconectado del servidor"); 
+            document.body.innerHTML = "<h2 style='color:red; text-align:center; margin-top:50px;'>Conexión perdida con el servidor. <br>Recargando...</h2>";
+            setTimeout(() => window.location.reload(), 2000);
+        });
+
+        function updateInterface() {
+            const badge = document.getElementById('role-badge');
+            const controls = document.getElementById('broadcaster-controls');
+            const listenerMsg = document.getElementById('listener-msg');
+            const monitorSec = document.getElementById('monitor-section');
+            const mainCol = document.getElementById('main-col');
+            const userCol = document.getElementById('user-col');
+
+            controls.classList.add('d-none');
+            listenerMsg.classList.add('d-none');
+            monitorSec.classList.add('d-none');
+
+            if(myRole === 'host') {
+                badge.innerText = "👑 ANFITRION"; badge.className = "badge bg-danger mb-4 fs-5";
+                controls.classList.remove('d-none'); monitorSec.classList.remove('d-none');
+                userCol.classList.remove('d-none'); mainCol.className = "col-md-7 mb-3"; 
+            } else if (myRole === 'cohost') {
+                badge.innerText = "⭐ CO-ANFITRION"; badge.className = "badge bg-warning text-dark mb-4 fs-5";
+                controls.classList.remove('d-none');
+                userCol.classList.remove('d-none'); mainCol.className = "col-md-7 mb-3";
+            } else {
+                badge.innerText = "🎧 OYENTE"; badge.className = "badge bg-secondary mb-4 fs-5";
+                listenerMsg.classList.remove('d-none');
+                userCol.classList.add('d-none'); mainCol.className = "col-md-6 mb-3"; 
+            }
+        }
+
+        socket.on('update-user-list', (users) => {
+            const list = document.getElementById('user-list');
+            list.innerHTML = '';
+            
+            // [FIX] GARBAGE COLLECTION: Identificar usuarios que se fueron
+            const activeUserIds = Object.keys(users);
+            Object.keys(peerConnections).forEach(connId => {
+                if (!activeUserIds.includes(connId)) {
+                    // El usuario connId ya no está en la lista del server, matamos su conexión localmente
+                    cleanupPeer(connId);
+                }
+            });
+
+            // 1. Lógica P2P
+            Object.values(users).forEach(u => {
+                if(u.id !== myId && !peerConnections[u.id]) {
+                    if (myId > u.id) initPeerConnection(u.id);
+                }
+            });
+
+            // 2. Lógica Visual (Solo para Host/Cohost)
+            if (myRole !== 'listener') {
+                Object.values(users).forEach(u => {
+                    const li = document.createElement('li');
+                    li.className = "user-item";
+                    let btns = '';
+                    if(myRole === 'host' && u.id !== myId) {
+                        if(u.role === 'listener') 
+                            btns += `<button class="btn btn-sm btn-outline-warning me-1" onclick="socket.emit('promote-user', '${u.id}')">Ascender</button>`;
+                        if(u.role === 'cohost') {
+                            btns += `<button class="btn btn-sm btn-outline-secondary me-1" onclick="socket.emit('demote-user', '${u.id}')">Degradar</button>`;
+                            btns += u.mutedByHost 
+                                ? `<button class="btn btn-sm btn-success" onclick="socket.emit('unmute-user', '${u.id}')">Habilitar</button>`
+                                : `<button class="btn btn-sm btn-danger" onclick="socket.emit('mute-user', '${u.id}')">Silenciar</button>`;
+                        }
+                    }
+                    // Sanitizamos visualización
+                    const safeName = u.name.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    li.innerHTML = `<div><strong>${safeName}</strong> <span class="badge bg-dark border border-secondary">${u.role}</span></div><div>${btns}</div>`;
+                    list.appendChild(li);
+                });
+            }
+        });
+
+        // Utils (Mantenidos igual pero asegurando contexto)
+        function toggleMonitor() { isMonitorOn = !isMonitorOn; const btn = document.getElementById('monitor-btn'); if(isMonitorOn) { btn.className = "btn btn-monitor-on w-100"; btn.innerText = "MONITOR: ACTIVO"; attachMonitor(); } else { btn.className = "btn btn-monitor-off w-100"; btn.innerText = "MONITOR: APAGADO"; document.getElementById('monitor-audio').srcObject = null; } }
+        function attachMonitor() { if(localStream && isMonitorOn) { document.getElementById('monitor-audio').srcObject = localStream; changeOutputDestination(); } }
+        async function changeOutputDestination() { const audioMonitor = document.getElementById('monitor-audio'); const deviceId = document.getElementById('audio-output').value; if (audioMonitor.setSinkId && deviceId) try { await audioMonitor.setSinkId(deviceId); } catch(e){} }
+        
+        function drawVuMeter() { 
+            const canvas = document.getElementById('vu-canvas'); 
+            const ctx = canvas.getContext('2d'); 
+            const dataArray = new Uint8Array(analyser.frequencyBinCount); 
+            function render() { 
+                if((!isMicOn && !isSysAudioOn) || !analyser) { // Check extra por si analyser se desconecta
+                    ctx.clearRect(0,0,canvas.width, canvas.height); 
+                    requestAnimationFrame(render); return; 
+                } 
+                analyser.getByteFrequencyData(dataArray); 
+                let sum = 0; for(let i=0; i<dataArray.length; i++) sum+=dataArray[i]; 
+                let avg = sum / dataArray.length; 
+                ctx.clearRect(0,0,canvas.width, canvas.height); 
+                ctx.fillStyle = avg > 100 ? '#ff0000' : (avg > 50 ? '#ffff00' : '#00ff00'); 
+                ctx.fillRect(0,0, (avg/150)*canvas.width, canvas.height); 
+                requestAnimationFrame(render); 
+            } 
+            render(); 
+        }
+    </script>
+</body>
+</html>
