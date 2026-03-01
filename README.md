@@ -204,6 +204,18 @@ Ingresa un nombre de usuario.
 -   El primero en entrar se convierte automáticamente en **Host**
 -   Los siguientes entran como **Oyentes**
 
+<p align="center">
+  <img src="img/host.png" alt="Anfitrion" width="600">
+</p>
+
+<p align="center">
+  <img src="img/cohost.png" alt="Co-Anfitrion" width="600">
+</p>
+
+<p align="center">
+  <img src="img/listener.jpeg" alt="Oyente" width="600">
+</p>
+
 ### 🎛 Controles
 
 -   🎙 **ON/OFF** → Activar o desactivar micrófono
